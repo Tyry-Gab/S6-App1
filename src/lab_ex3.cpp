@@ -25,11 +25,19 @@ int main(int argc, char** argv)
 
         std::string line;
 
-        std::getline(std::cin, line);
+        std::getline(std::cin, line, ' ');
+        int val1 = 1 ;
         if (!line.empty()) {
-            int val = atoi(line.c_str());
-            std::cout << val * 2 << std::endl;
+            val1 = atoi(line.c_str());            
         }
+
+        std::getline(std::cin, line);
+        int val2 = 1 ;
+        if (!line.empty()) {
+            val2 = atoi(line.c_str());            
+        }
+
+        std::cout << val1 * val2 << std::endl;
     }
 
     if (file_in.is_open()) {
