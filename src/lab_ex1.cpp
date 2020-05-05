@@ -5,12 +5,14 @@
 // Espace anonyme pour les variables globales et partagées :
 namespace {
     int somme_;     // Contiendra la somme (devrait être 50005000).
+    std::mutex mutex_somme;
 }
 
 void accum(int d, int f)
 {
     // Ajoute les nombres de d à f (inclusivement) à la variable somme_.
     for (int i = d; i <= f; ++i) {
+        std::unique_lock<std::mutex> accum_lock (mutex_somme);
         somme_ += i;
     }
 }
