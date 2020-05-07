@@ -12,15 +12,18 @@
 #include <string>
 #include <cstring>
 #include <thread>
+#include <mutex>
 
 namespace gif643 {
 
 const size_t    BPP         = 4;    // Bytes per pixel
 const float     ORG_WIDTH   = 48.0; // Original SVG image width in px.
-const int       NUM_THREADS = 1;    // Default value, changed by argv. 
+const int       NUM_THREADS = 48;    // Default value, changed by argv. 
 
 using PNGDataVec = std::vector<char>;
 using PNGDataPtr = std::shared_ptr<PNGDataVec>;
+
+std::mutex g_QueueMutex;
 
 /// \brief Wraps callbacks from stbi_image_write
 //
@@ -318,6 +321,7 @@ public:
     /// nothing is queued.
     void parseAndQueue(const std::string& line_org)
     {
+        std::unique_lock<std::mutex> lock(g_QueueMutex);
         std::queue<TaskDef> queue;
         TaskDef def;
         if (parse(line_org, def)) {
@@ -337,12 +341,15 @@ private:
     void processQueue()
     {
         while (should_run_) {
+            std::unique_lock<std::mutex> lock(g_QueueMutex);
             if (!task_queue_.empty()) {
                 TaskDef task_def = task_queue_.front();
                 task_queue_.pop();
                 TaskRunner runner(task_def);
                 runner();
             }
+            lock.unlock();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
 };
