@@ -8,7 +8,7 @@ import sys
 NUM_PROCESSES = 2
 
 def run_process(task_desc):
-    p = subprocess.Popen(["./asset_conv"], stdin=subprocess.PIPE)
+    p = subprocess.Popen(["../build/asset_conv"], stdin=subprocess.PIPE)
     p.communicate(input=task_desc.encode())
 
 
