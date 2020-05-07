@@ -102,6 +102,7 @@ struct TaskDef
     std::string fname_in;
     std::string fname_out; 
     int size;
+    PNGDataPtr pngData;
 };
 
 /// \brief A class representing the processing of one SVG file to a PNG stream.
@@ -144,7 +145,8 @@ public:
                 std::string msg = "Cannot parse '" + fname_in + "'.";
                 throw std::runtime_error(msg.c_str());
             }
-
+            
+            if(task_def_.pngData == nullptr) {
             // Raster it ...
             std::vector<unsigned char> image_data(image_size, 0);
             rast = nsvgCreateRasterizer();
@@ -162,9 +164,12 @@ public:
             PNGWriter writer;
             writer(width, height, BPP, &image_data[0], stride);
 
-            // Write it out ...
+            // Filling shared pointer data in cache
+            task_def_.pngData = writer.getData();
+            }
+            
             std::ofstream file_out(fname_out, std::ofstream::binary);
-            auto data = writer.getData();
+            auto data = task_def_.pngData;
             file_out.write(&(data->front()), data->size());
             
         } catch (std::runtime_error e) {
@@ -282,8 +287,14 @@ public:
             def = {
                 fname_in,
                 fname_out,
-                width
+                width,
+                nullptr
             };
+            //Inserting key with shared pointer to be associated with real png data in conversion
+            if (png_cache_.count(def.fname_in) == 0) {
+                def.pngData = nullptr;
+                png_cache_.insert({def.fname_in, def.pngData});
+            }      
 
             return true;
     }
