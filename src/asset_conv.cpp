@@ -18,7 +18,7 @@ namespace gif643 {
 
 const size_t    BPP         = 4;    // Bytes per pixel
 const float     ORG_WIDTH   = 48.0; // Original SVG image width in px.
-const int       NUM_THREADS = 48;    // Default value, changed by argv. 
+const int       NUM_THREADS = 1;    // Default value, changed by argv. 
 
 using PNGDataVec = std::vector<char>;
 using PNGDataPtr = std::shared_ptr<PNGDataVec>;
@@ -122,7 +122,9 @@ public:
         task_def_(task_def)
     {
     }
-
+    PNGDataPtr getPNGData() {
+        return task_def_.pngData;
+    }
     void operator()()
     {
         const std::string&  fname_in    = task_def_.fname_in;
@@ -142,33 +144,35 @@ public:
         NSVGrasterizer*     rast            = nullptr;
 
         try {
-            // Read the file ...
-            image_in = nsvgParseFromFile(fname_in.c_str(), "px", 0);
-            if (image_in == nullptr) {
-                std::string msg = "Cannot parse '" + fname_in + "'.";
-                throw std::runtime_error(msg.c_str());
-            }
-            
             if(task_def_.pngData == nullptr) {
-            // Raster it ...
-            std::vector<unsigned char> image_data(image_size, 0);
-            rast = nsvgCreateRasterizer();
-            nsvgRasterize(rast,
-                          image_in,
-                          0,
-                          0,
-                          scale,
-                          &image_data[0],
-                          width,
-                          height,
-                          stride); 
+                std::cout << "Reading file..." << std::endl;
+                // Read the file ...
+                image_in = nsvgParseFromFile(fname_in.c_str(), "px", 0);
+                if (image_in == nullptr) {
+                    std::string msg = "Cannot parse '" + fname_in + "'.";
+                    throw std::runtime_error(msg.c_str());
+                }
+                
+                
+                // Raster it ...
+                std::vector<unsigned char> image_data(image_size, 0);
+                rast = nsvgCreateRasterizer();
+                nsvgRasterize(rast,
+                            image_in,
+                            0,
+                            0,
+                            scale,
+                            &image_data[0],
+                            width,
+                            height,
+                            stride); 
 
-            // Compress it ...
-            PNGWriter writer;
-            writer(width, height, BPP, &image_data[0], stride);
+                // Compress it ...
+                PNGWriter writer;
+                writer(width, height, BPP, &image_data[0], stride);
 
-            // Filling shared pointer data in cache
-            task_def_.pngData = writer.getData();
+                // Filling shared pointer data in cache
+                task_def_.pngData = writer.getData();
             }
             
             std::ofstream file_out(fname_out, std::ofstream::binary);
@@ -219,7 +223,8 @@ private:
     // The cache hash map (TODO). Note that we use the string definition as the // key.
     using PNGHashMap = std::unordered_map<std::string, PNGDataPtr>;
     PNGHashMap png_cache_;
-
+    std::mutex m_CacheMutex;
+    int m_NumThreads;
     bool should_run_;           // Used to signal the end of the processor to
                                 // threads.
 
@@ -242,9 +247,10 @@ public:
                       << NUM_THREADS
                       << std::endl;
             n_threads = NUM_THREADS;
+            
         }
-
-        for (int i = 0; i < n_threads; ++i) {
+        m_NumThreads = n_threads;
+        for (int i = 0; i < m_NumThreads; ++i) {
             queue_threads_.push_back(
                 std::thread(&Processor::processQueue, this)
             );
@@ -286,32 +292,20 @@ public:
             const std::string& width_str    = tokens[2]; 
 
             int width = std::atoi(width_str.c_str());
-
+            
             def = {
                 fname_in,
                 fname_out,
                 width,
                 nullptr
-            };
-            //Inserting key with shared pointer to be associated with real png data in conversion
-            if (png_cache_.count(def.fname_in) == 0) {
-                def.pngData = nullptr;
-                png_cache_.insert({def.fname_in, def.pngData});
-            }      
-
+            };    
             return true;
     }
 
-    /// \brief Tries to parse the given task definition and run it.
-    ///
-    /// The parsing method will output error messages if it is not valid. 
-    /// Nothing occurs if it's the case.
-    void parseAndRun(const std::string& line_org)
-    {
-        TaskDef def;
-        if (parse(line_org, def)) {
-            TaskRunner runner(def);
-            runner();
+    void insertPNGData(TaskDef& p_Def) {
+        std::lock_guard<std::mutex> lock(m_CacheMutex);
+        if (png_cache_.count(p_Def.fname_in) == 0) {
+            png_cache_.insert({p_Def.fname_in, p_Def.pngData});
         }
     }
 
@@ -319,15 +313,17 @@ public:
     ///
     /// If the definition is invalid, error messages are sent to stderr and 
     /// nothing is queued.
+    /// Producer
     void parseAndQueue(const std::string& line_org)
     {
-        std::unique_lock<std::mutex> lock(g_QueueMutex);
-        std::queue<TaskDef> queue;
         TaskDef def;
+        std::unique_lock<std::mutex> lock(g_QueueMutex);
         if (parse(line_org, def)) {
             std::cerr << "Queueing task '" << line_org << "'." << std::endl;
             task_queue_.push(def);
         }
+        lock.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(15));
     }
 
     /// \brief Returns if the internal queue is empty (true) or not.
@@ -338,6 +334,7 @@ public:
 
 private:
     /// \brief Queue processing thread function.
+    /// Consummer
     void processQueue()
     {
         while (should_run_) {
@@ -345,11 +342,20 @@ private:
             if (!task_queue_.empty()) {
                 TaskDef task_def = task_queue_.front();
                 task_queue_.pop();
+                if (png_cache_.count(task_def.fname_in) != 0) {
+                    task_def.pngData =  png_cache_.at(task_def.fname_in);
+                }
+                lock.unlock();
                 TaskRunner runner(task_def);
                 runner();
+                task_def.pngData = runner.getPNGData();
+                insertPNGData(task_def);
             }
-            lock.unlock();
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            else
+            {
+                lock.unlock();                
+            }  
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));     
         }
     }
 };
