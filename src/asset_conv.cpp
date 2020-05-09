@@ -22,6 +22,7 @@ const int       NUM_THREADS = 1;    // Default value, changed by argv.
 
 using PNGDataVec = std::vector<char>;
 using PNGDataPtr = std::shared_ptr<PNGDataVec>;
+using NSVGDataPtr = std::shared_ptr<NSVGimage>;
 
 std::mutex g_QueueMutex;
 
@@ -105,7 +106,7 @@ struct TaskDef
     std::string fname_in;
     std::string fname_out; 
     int size;
-    PNGDataPtr pngData;
+    NSVGDataPtr nsvgData;
 };
 
 /// \brief A class representing the processing of one SVG file to a PNG stream.
@@ -122,8 +123,8 @@ public:
         task_def_(task_def)
     {
     }
-    PNGDataPtr getPNGData() {
-        return task_def_.pngData;
+    NSVGDataPtr getNSVGData() {
+        return task_def_.nsvgData;
     }
     void operator()()
     {
@@ -140,46 +141,42 @@ public:
                   << "..." 
                   << std::endl;
 
-        NSVGimage*          image_in        = nullptr;
+        NSVGimage*          image_in        = task_def_.nsvgData.get();
         NSVGrasterizer*     rast            = nullptr;
 
         try {
-            if(task_def_.pngData == nullptr) {
-                std::cout << "Reading file..." << std::endl;
+            if(task_def_.nsvgData == nullptr) {
                 // Read the file ...
                 image_in = nsvgParseFromFile(fname_in.c_str(), "px", 0);
-                if (image_in == nullptr) {
-                    std::string msg = "Cannot parse '" + fname_in + "'.";
-                    throw std::runtime_error(msg.c_str());
-                }
-                
-                
-                // Raster it ...
-                std::vector<unsigned char> image_data(image_size, 0);
-                rast = nsvgCreateRasterizer();
-                nsvgRasterize(rast,
-                            image_in,
-                            0,
-                            0,
-                            scale,
-                            &image_data[0],
-                            width,
-                            height,
-                            stride); 
-
-                // Compress it ...
-                PNGWriter writer;
-                writer(width, height, BPP, &image_data[0], stride);
-
-                // Filling shared pointer data in cache
-                task_def_.pngData = writer.getData();
             }
+            if (image_in == nullptr) {
+                std::string msg = "Cannot parse '" + fname_in + "'.";
+                throw std::runtime_error(msg.c_str());
+            }           
             
+            // Raster it ...
+            std::vector<unsigned char> image_data(image_size, 0);
+            rast = nsvgCreateRasterizer();
+            nsvgRasterize(rast,
+                        image_in,
+                        0,
+                        0,
+                        scale,
+                        &image_data[0],
+                        width,
+                        height,
+                        stride); 
+
+            // Compress it ...
+            PNGWriter writer;
+            writer(width, height, BPP, &image_data[0], stride);
+
+            // Filling shared pointer data in cache
             std::ofstream file_out(fname_out, std::ofstream::binary);
-            auto data = task_def_.pngData;
+            auto data = writer.getData();
             file_out.write(&(data->front()), data->size());
-            
-        } catch (std::runtime_error e) {
+        }          
+        catch (std::runtime_error e) {
             std::cerr << "Exception while processing "
                       << fname_in
                       << ": "
@@ -221,7 +218,7 @@ private:
     std::queue<TaskDef> task_queue_;
 
     // The cache hash map (TODO). Note that we use the string definition as the // key.
-    using PNGHashMap = std::unordered_map<std::string, PNGDataPtr>;
+    using PNGHashMap = std::unordered_map<std::string, NSVGDataPtr>;
     PNGHashMap png_cache_;
     std::mutex m_CacheMutex;
     int m_NumThreads;
@@ -305,7 +302,7 @@ public:
     void insertPNGData(TaskDef& p_Def) {
         std::lock_guard<std::mutex> lock(m_CacheMutex);
         if (png_cache_.count(p_Def.fname_in) == 0) {
-            png_cache_.insert({p_Def.fname_in, p_Def.pngData});
+            png_cache_.insert({p_Def.fname_in, p_Def.nsvgData});
         }
     }
 
@@ -343,12 +340,12 @@ private:
                 TaskDef task_def = task_queue_.front();
                 task_queue_.pop();
                 if (png_cache_.count(task_def.fname_in) != 0) {
-                    task_def.pngData =  png_cache_.at(task_def.fname_in);
+                    task_def.nsvgData =  png_cache_.at(task_def.fname_in);
                 }
                 lock.unlock();
                 TaskRunner runner(task_def);
                 runner();
-                task_def.pngData = runner.getPNGData();
+                task_def.nsvgData = runner.getNSVGData();
                 insertPNGData(task_def);
             }
             else
