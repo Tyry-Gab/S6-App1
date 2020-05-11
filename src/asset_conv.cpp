@@ -314,13 +314,11 @@ public:
     void parseAndQueue(const std::string& line_org)
     {
         TaskDef def;
-        std::unique_lock<std::mutex> lock(g_QueueMutex);
         if (parse(line_org, def)) {
             std::cerr << "Queueing task '" << line_org << "'." << std::endl;
+            std::lock_guard<std::mutex> lock(g_QueueMutex);
             task_queue_.push(def);
-        }
-        lock.unlock();
-        std::this_thread::sleep_for(std::chrono::milliseconds(15));
+        }        
     }
 
     /// \brief Returns if the internal queue is empty (true) or not.
@@ -339,14 +337,17 @@ private:
             if (!task_queue_.empty()) {
                 TaskDef task_def = task_queue_.front();
                 task_queue_.pop();
-                if (png_cache_.count(task_def.fname_in) != 0) {
+                bool isPngInCache = png_cache_.count(task_def.fname_in) != 0;
+                if (isPngInCache) {
                     task_def.nsvgData =  png_cache_.at(task_def.fname_in);
                 }
                 lock.unlock();
                 TaskRunner runner(task_def);
                 runner();
-                task_def.nsvgData = runner.getNSVGData();
-                insertPNGData(task_def);
+                if (!isPngInCache) {
+                    task_def.nsvgData = runner.getNSVGData();
+                    insertPNGData(task_def);
+                }                
             }
             else
             {
@@ -383,8 +384,7 @@ int main(int argc, char** argv)
     // TODO: change the number of threads from args.
     int nbThreads = argc >= 2 ? std::atoi(argv[1]) : NUM_THREADS;
     std::cout << "Launching with " << nbThreads << " threads" << std::endl;
-    Processor proc(nbThreads);
-        
+    Processor proc(nbThreads);        
     
     while (!std::cin.eof()) {
 
@@ -394,6 +394,7 @@ int main(int argc, char** argv)
         if (!line.empty()) {
             proc.parseAndQueue(line);
         }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
     if (file_in.is_open()) {
