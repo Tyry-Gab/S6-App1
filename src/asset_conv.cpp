@@ -13,6 +13,7 @@
 #include <cstring>
 #include <thread>
 #include <mutex>
+#include <condition_variable>
 
 namespace gif643 {
 
@@ -224,6 +225,7 @@ private:
     int m_NumThreads;
     bool should_run_;           // Used to signal the end of the processor to
                                 // threads.
+    std::condition_variable hasTasks;
 
     std::vector<std::thread> queue_threads_;
 
@@ -257,6 +259,7 @@ public:
     ~Processor()
     {
         should_run_ = false;
+        hasTasks.notify_all();
         for (auto& qthread: queue_threads_) {
             qthread.join();
         }
@@ -318,6 +321,7 @@ public:
             std::cerr << "Queueing task '" << line_org << "'." << std::endl;
             std::lock_guard<std::mutex> lock(g_QueueMutex);
             task_queue_.push(def);
+            hasTasks.notify_one();
         }        
     }
 
@@ -334,7 +338,8 @@ private:
     {
         while (should_run_) {
             std::unique_lock<std::mutex> lock(g_QueueMutex);
-            if (!task_queue_.empty()) {
+            hasTasks.wait(lock, [&]() {return (!task_queue_.empty() || !should_run_);});
+            if(!task_queue_.empty()) {
                 TaskDef task_def = task_queue_.front();
                 task_queue_.pop();
                 bool isPngInCache = png_cache_.count(task_def.fname_in) != 0;
@@ -347,13 +352,8 @@ private:
                 if (!isPngInCache) {
                     task_def.nsvgData = runner.getNSVGData();
                     insertPNGData(task_def);
-                }                
+                }      
             }
-            else
-            {
-                lock.unlock();                
-            }  
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));     
         }
     }
 };
@@ -394,7 +394,6 @@ int main(int argc, char** argv)
         if (!line.empty()) {
             proc.parseAndQueue(line);
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
     if (file_in.is_open()) {
