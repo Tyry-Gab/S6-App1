@@ -344,6 +344,7 @@ private:
                 task_queue_.pop();
                 bool isPngInCache = png_cache_.count(task_def.fname_in) != 0;
                 if (isPngInCache) {
+                    std::lock_guard<std::mutex> cache_lock(m_CacheMutex);
                     task_def.nsvgData =  png_cache_.at(task_def.fname_in);
                 }
                 lock.unlock();
